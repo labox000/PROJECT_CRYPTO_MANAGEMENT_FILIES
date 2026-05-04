@@ -1,3 +1,5 @@
+from crypt import hash_password
+from users import User, add_user, get_user, user_exists
 def register(username: str, password: str) -> tuple[bool, str]:
     """
     register nouvel user .
