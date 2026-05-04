@@ -28,7 +28,7 @@ class User:
         return f"User(username={self.username!r})" #affichage user
     
 def _load_users() -> dict:
-    """Charge le fichier users.json et retourne un dict {username: User}."""
+    """Charge le fichier users.json et retourne un dict de user """
     with open(USERS_FILE, "r", encoding="utf-8") as f:
         raw = json.load(f)
     return {username: User.from_dict(data) for username, data in raw.items()}
@@ -47,15 +47,15 @@ def _save_users(users: dict) -> None:
  
  
 def get_user(username: str):
-    """Retourne un objet User ou None si introuvable."""
+    """Retourne un objet User ou None if not found."""
     users = _load_users()
     return users.get(username)
  
  
 def add_user(user: User) -> bool:
     """
-    Ajoute un nouvel utilisateur.
-    Retourne False si le nom d'utilisateur existe déjà.
+    Add new user.
+    Retourne False if exist deja.
     """
     users = _load_users()
     if user.username in users:
@@ -66,5 +66,5 @@ def add_user(user: User) -> bool:
  
  
 def user_exists(username: str) -> bool:
-    """Vérifie si un utilisateur existe."""
+    """Vérifie if user exists."""
     return _load_users().get(username) is not None
