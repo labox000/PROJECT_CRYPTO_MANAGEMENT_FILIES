@@ -5,6 +5,7 @@ Toutes les interactions SQLite passent par ce fichier.
 
 import sqlite3
 import os
+from datetime import datetime 
 
 DB_PATH     = "User_Management.db"
 SCHEMA_PATH = "schema.sql"
@@ -97,8 +98,16 @@ def create_user(
     username: str,
     password_hash: str,
     salt: str,
-    role: str = "user"
+    role: str = "user",
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None
 ) -> tuple[bool, str]:
+
+    if created_at is None:
+        created_at = datetime.now()
+
+    if updated_at is None:
+        updated_at = datetime.now()
     """
     Insère un nouvel utilisateur.
     Retourne (True, message) ou (False, message d'erreur).
@@ -107,10 +116,10 @@ def create_user(
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO Users (user_id, username, password_hash, salt, role)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO Users (user_id, username, password_hash, salt, role,created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, username.strip().lower(), password_hash, salt, role)
+                (user_id, username.strip().lower(), password_hash, salt, role, created_at, updated_at)
             )
         return True, f"Utilisateur '{username}' créé."
     except sqlite3.IntegrityError:

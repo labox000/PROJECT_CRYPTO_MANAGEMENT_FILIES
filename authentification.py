@@ -1,14 +1,12 @@
 from crypt import hash_password
-from users import User, add_user, get_user, user_exists
+import db 
 import sqlite3
 import uuid 
 from datetime import datetime
 
 #ESTABLISHING CONNECTION WITH THE DATABASE --------------------------------------
 
-connection = sqlite3.connect("User_Management.db")
-cursor = connection.cursor()
-
+connection = db.get_connection()
 #--------------------------------------------------------------------------------
 
 def register(username: str, password: str) -> tuple[bool, str]:
@@ -47,8 +45,7 @@ def register(username: str, password: str) -> tuple[bool, str]:
     
     #verification de l'existence de l'utilisateur dans la base de données
 
-    cursor.execute(""" SELECT 1 FROM Users WHERE username = ? """, (username,))
-    if cursor.fetchone():
+    if db.user_exists(username):
         print("Username already exists")
         return   False ," utilisateur existant "
     
@@ -62,37 +59,14 @@ def register(username: str, password: str) -> tuple[bool, str]:
     password_hash, salt = hash_password(password)
     #------------------------------------------------------------
     
-    creation_date = datetime.now()
+    db.create_user(
+        user_id=user_id,
+        username=username,
+        password_hash=password_hash,
+        salt=salt
+    )
     
-    #Adding to database
-    try:
-
-        
-        cursor.execute("""
-            INSERT INTO Users
-            (user_id, username, password_hash, role, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            username,
-            password_hash,
-            "user",
-            creation_date
-        ))
-
-        connection.commit()
-
-        print("User registered successfully")
-
-    except sqlite3.IntegrityError:
-
-        return False , "User already existant"
-
-    except sqlite3.Error as e:
-
-        return False , f"Database error: {e}"
-    
-    connection.close()
+    db.get_connection().close()
 
 
     return True, f"Compte '{username}' créé avec succès."
