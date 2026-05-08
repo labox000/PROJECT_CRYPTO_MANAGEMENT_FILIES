@@ -469,16 +469,6 @@ def cfb_decrypt(ciphertext: bytes, key: bytes, iv: bytes):
     return _pkcs7_unpad(plaintext)
 
 
-
-
-
-
-
-
-
- 
- 
-
 def hash_password(password: str,salt) -> tuple[str, str]:
     """ 
     Hash un mot de passe avec SHA-256 + salt aléatoire.
