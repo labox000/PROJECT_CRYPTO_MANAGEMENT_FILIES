@@ -99,7 +99,13 @@ def authenticate(username: str, password: str) -> tuple[bool, str] :
         salt = user["salt"]
 
         if hash_password(password, salt)  == stored_hash :
-            return True, f"Bienvenue {username} !"
+            print("Authentication successful")
+            print(f"Welcome, {user['username']}!")
+            return True, {
+            "user_id": user["user_id"],
+            "username": user["username"],
+            "role": user["role"]
+            } 
         else:
             return False, "Nom d'utilisateur ou mot de passe incorrect."
     except Exception as e:
