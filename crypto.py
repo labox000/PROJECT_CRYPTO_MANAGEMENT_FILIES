@@ -475,12 +475,12 @@ def cfb_decrypt(ciphertext: bytes, key: bytes, iv: bytes):
 
 
 
-''''
+
  
  
 
-def hash_password(password: str) -> tuple[str, str]:
-    """
+def hash_password(password: str,salt) -> tuple[str, str]:
+    """ 
     Hash un mot de passe avec SHA-256 + salt aléatoire.
  
     Mécanisme :
@@ -490,19 +490,16 @@ def hash_password(password: str) -> tuple[str, str]:
         4. Retourne (hash_hex, salt_hex)  — les deux sont stockés en DB
  
     Retourne :
-        (password_hash, salt)  — deux strings hexadécimales
-    """
-    salt_bytes    = os.urandom(32)                        # 256 bits aléatoires
-    salt_hex      = salt_bytes.hex()                      # stocké en DB tel quel
+        (password_hash, salt)  — deux strings hexadécimales """
+    
+    salt_hex      = salt.hex()                      # stocké en DB tel quel
  
-    salted        = salt_bytes + password.encode("utf-8") # salt + mdp en bytes
+    salted        = salt + password.encode("utf-8") # salt + mdp en bytes
     password_hash = sha256(salted)                        # notre sha256 maison
  
     return password_hash, salt_hex
- 
- 
+""" 
 def verify_password(password: str, stored_hash: str, stored_salt: str) -> bool:
-    """
     Vérifie qu'un mot de passe correspond au hash stocké en DB.
  
     Mécanisme :
@@ -517,9 +514,9 @@ def verify_password(password: str, stored_hash: str, stored_salt: str) -> bool:
  
     Retourne :
         True si le mot de passe est correct, False sinon.
-    """
     salt_bytes    = bytes.fromhex(stored_salt)
     salted        = salt_bytes + password.encode("utf-8")
     computed_hash = sha256(salted)
  
     return computed_hash == stored_hash
+"""
