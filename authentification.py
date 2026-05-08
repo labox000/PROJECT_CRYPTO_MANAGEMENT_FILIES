@@ -1,13 +1,15 @@
-from crypt import hash_password
+from crypto import hash_password
+import secrets
 import db 
 import sqlite3
 import uuid 
 from datetime import datetime
+import secrets
 
 #ESTABLISHING CONNECTION WITH THE DATABASE --------------------------------------
 
 connection = db.get_connection()
-#--------------------------------------------------------------------------------
+#register-------------------------------------------------------------------------------
 
 def register(username: str, password: str) -> tuple[bool, str]:
     """
@@ -56,7 +58,9 @@ def register(username: str, password: str) -> tuple[bool, str]:
     #------------------------------------------------------------
     
     #hashing password
-    password_hash, salt = hash_password(password)
+
+    salt = secrets.token_hex(16)
+    password_hash = hash_password(password, salt)
     #------------------------------------------------------------
     
     db.create_user(
@@ -70,3 +74,34 @@ def register(username: str, password: str) -> tuple[bool, str]:
 
 
     return True, f"Compte '{username}' créé avec succès."
+
+
+
+#authentication function --------------------------------------------------------------
+
+def authenticate(username: str, password: str) -> tuple[bool, str] :
+    """
+    Authentifie un utilisateur.
+    Retourne (True, message) ou (False, message d'erreur).
+    """
+    try:
+        username=username.strip().lower()
+        if not username :
+            return False, "Le nom d'utilisateur ne peut pas être vide."
+        if not password.strip():
+            return False, "Le mot de passe ne peut pas être vide." 
+
+        user = db.get_user_by_username(username)
+        if user is None:
+            return False, "Nom d'utilisateur ou mot de passe incorrect."
+
+        stored_hash = user["password_hash"]
+        salt = user["salt"]
+
+        if hash_password(password, salt)  == stored_hash :
+            return True, f"Bienvenue {username} !"
+        else:
+            return False, "Nom d'utilisateur ou mot de passe incorrect."
+    except Exception as e:
+
+        return False, f"Erreur d'authentification : {e}"
