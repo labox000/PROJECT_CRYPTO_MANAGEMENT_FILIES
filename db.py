@@ -155,8 +155,18 @@ def update_password(user_id: str, new_hash: str, new_salt: str) -> tuple[bool, s
         return True, "Mot de passe mis à jour."
     except sqlite3.Error as e:
         return False, f"Erreur base de données : {e}"
+    
+# ===========================================
+# check previlige of the user
 
+def is_admin(user):
+    return user["role"] == "admin"
 
+def require_admin(user):
+    if user["role"] != "admin":
+        raise PermissionError()
+    
+#========`=================================================
 # ============================================================
 #  SESSIONS  —  lecture
 # ============================================================

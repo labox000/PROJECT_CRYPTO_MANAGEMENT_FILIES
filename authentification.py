@@ -1,9 +1,10 @@
+import objects
 from crypto import hash_password
 import secrets
 import db 
 import sqlite3
 import uuid 
-from datetime import datetime
+from datetime import datetime, timedelta
 import secrets
 
 #ESTABLISHING CONNECTION WITH THE DATABASE --------------------------------------
@@ -60,7 +61,7 @@ def register(username: str, password: str) -> tuple[bool, str]:
     #hashing password
 
     salt = secrets.token_hex(16)
-    password_hash = hash_password(password, salt)
+    password_hash = hash_password(password, salt)[0]
     #------------------------------------------------------------
     
     db.create_user(
@@ -79,10 +80,10 @@ def register(username: str, password: str) -> tuple[bool, str]:
 
 #authentication function --------------------------------------------------------------
 
-def authenticate(username: str, password: str) -> tuple[bool, str] :
+def authenticate(username: str, password: str) -> tuple[bool, objects.User | str]: 
     """
     Authentifie un utilisateur.
-    Retourne (True, message) ou (False, message d'erreur).
+    Retourne (True, user) ou (False, message d'erreur).
     """
     try:
         username=username.strip().lower()
@@ -98,16 +99,37 @@ def authenticate(username: str, password: str) -> tuple[bool, str] :
         stored_hash = user["password_hash"]
         salt = user["salt"]
 
-        if hash_password(password, salt)  == stored_hash :
+        if hash_password(password, salt)[0] == stored_hash:
             print("Authentication successful")
             print(f"Welcome, {user['username']}!")
-            return True, {
-            "user_id": user["user_id"],
-            "username": user["username"],
-            "role": user["role"]
-            } 
+            #create current user object
+            current_user = objects.User(
+                user_id=user["user_id"],
+                username=user["username"],
+                password_hash=user["password_hash"],
+                salt=user["salt"],
+                role=user["role"]
+            )
+            #return the user object for further use (e.g., session creation)
+            return True, current_user
         else:
             return False, "Nom d'utilisateur ou mot de passe incorrect."
     except Exception as e:
 
         return False, f"Erreur d'authentification : {e}"
+    
+def create_session(user_id: str) -> objects.Session :
+    """Crée une session pour un utilisateur donné et retourne l'objet session."""
+    token = secrets.token_hex(32)
+    created_at = datetime.now()
+    try:
+        with db.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO Sessions (session_id, user_id , created_at , expires_at) VALUES (?, ?, ?, ?)",
+                (token, user_id, datetime.now() , created_at + timedelta(minutes=10))
+            )
+    except sqlite3.Error as e :
+        print(f"Erreur lors de la création de session : {e}")
+        return False
+    current_Session = objects.Session(session_id=token, user_id=user_id, created_at=created_at, expires_at=created_at + timedelta(minutes=10))
+    return current_Session 
