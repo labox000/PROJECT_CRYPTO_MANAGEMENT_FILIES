@@ -1,7 +1,7 @@
-import objects
-from crypto import hash_password
+import core.objects as objects
+from core.crypto import hash_password
 import secrets
-import db 
+import core.db as db 
 import sqlite3
 import uuid 
 from datetime import datetime, timedelta

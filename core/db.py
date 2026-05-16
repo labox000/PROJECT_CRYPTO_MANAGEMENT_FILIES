@@ -11,9 +11,9 @@ DB_PATH     = "User_Management.db"
 SCHEMA_PATH = "schema.sql"
 
 
-# ============================================================
+"""PART 1 / GESTION UTILISATEUR"""
 #  CONNEXION
-# ============================================================
+
 
 def get_connection() -> sqlite3.Connection:
     """
@@ -45,9 +45,9 @@ def init_db() -> None:
         conn.executescript(sql)
 
 
-# ============================================================
+
 #  USERS  —  lecture
-# ============================================================
+
 
 def get_user_by_username(username: str) -> sqlite3.Row | None:
     """
@@ -89,9 +89,9 @@ def list_users() -> list[sqlite3.Row]:
         ).fetchall()
 
 
-# ============================================================
+
 #  USERS  —  écriture
-# ============================================================
+
 
 def create_user(
     user_id: str,
@@ -166,10 +166,9 @@ def require_admin(user):
     if user["role"] != "admin":
         raise PermissionError()
     
-#========`=================================================
-# ============================================================
+
+
 #  SESSIONS  —  lecture
-# ============================================================
 
 def get_session(session_id: str) -> sqlite3.Row | None:
     """
@@ -200,9 +199,7 @@ def get_active_session_for_user(user_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-# ============================================================
 #  SESSIONS  —  écriture
-# ============================================================
 
 def create_session(
     session_id: str,
@@ -246,3 +243,75 @@ def delete_expired_sessions() -> int:
             "DELETE FROM Sessions WHERE expires_at <= datetime('now')"
         )
         return cursor.rowcount
+
+"""PART 2 / GESTION DE FICHIER"""
+
+def get_file(file_id: str) -> sqlite3.Row | None:
+    """Retourne un fichier par son ID, ou None."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM Files WHERE file_id = ?",
+            (file_id,)
+        ).fetchone()
+
+
+def get_file_by_name(owner_id: str, filename: str) -> sqlite3.Row | None:
+    """Retourne le fichier d'un user par son nom, ou None."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM Files WHERE owner_id = ? AND filename = ?",
+            (owner_id, filename)
+        ).fetchone()
+    
+def list_user_files(owner_id: str) -> list[sqlite3.Row]:
+    """Retourne tous les fichiers d'un utilisateur."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM Files WHERE owner_id = ?",
+            (owner_id,)
+        ).fetchall()
+
+
+def list_all_files() -> list[sqlite3.Row]:
+    """Retourne tous les fichiers de tous les users. Réservé admin."""
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT f.*, u.username
+            FROM Files f
+            JOIN Users u ON f.owner_id = u.user_id
+            """
+        ).fetchall()
+
+def create_file(
+    file_id: str,
+    owner_id: str,
+    filename: str,
+    crypto_mode: str,
+    crypto_meta: str,    # json.dumps({"key": ..., "iv": ...})
+    stored_path: str,
+) -> tuple[bool, str]:
+    """Enregistre un fichier en base après chiffrement."""
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO Files (file_id, owner_id, filename, crypto_mode, crypto_meta, stored_path)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (file_id, owner_id, filename, crypto_mode, crypto_meta, stored_path)
+            )
+        return True, f"Fichier '{filename}' enregistré."
+    except sqlite3.IntegrityError:
+        return False, f"Vous avez déjà un fichier nommé '{filename}'."
+    except sqlite3.Error as e:
+        return False, f"Erreur base de données : {e}"
+
+def delete_file(file_id: str) -> tuple[bool, str]:
+    """Supprime l'entrée d'un fichier en base."""
+    try:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM Files WHERE file_id = ?", (file_id,))
+        return True, "Fichier supprimé."
+    except sqlite3.Error as e:
+        return False, f"Erreur base de données : {e}"
