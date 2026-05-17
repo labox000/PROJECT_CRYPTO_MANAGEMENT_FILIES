@@ -43,7 +43,7 @@ def add_file(
       2. Calcul du hash du contenu brut
       3. Chiffrement selon l'algo choisi
       4. Sauvegarde physique dans storage/users/<user_id>/
-      5. Enregistrement en base (avec hash et métadonnées crypto)
+      5. Enregistrement en base (avec hash et  crypto)
 
     Args:
         source_path  : chemin vers le fichier fourni par l'utilisateur
@@ -115,7 +115,6 @@ def open_file(
       - is_decrypted  : True si le propriétaire a reçu le contenu déchiffré
       - integrity_ok  : True si le hash recalculé correspond au hash stocké
 
-    FIX : la version originale déchiffrait sans aucun contrôle d'accès.
     """
     file_row = db.get_file_by_name(owner_id, filename)
     if not file_row:
