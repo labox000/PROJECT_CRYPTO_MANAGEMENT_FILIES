@@ -2,11 +2,12 @@
 import os
 import hashlib
 import base64
-from database import (
+from core.authentification import (
     init_db, register_user, authenticate_user,
     change_username, change_password,
     get_all_users, get_user_audit_log, is_admin
 )
+from core.files import add_file, open_file, delete_file, list_files
 
 # ─── UTILITAIRES TERMINAL ─────────────────────────────────────────────────────
 
