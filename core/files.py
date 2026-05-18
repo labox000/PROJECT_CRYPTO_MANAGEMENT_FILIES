@@ -54,7 +54,6 @@ def add_file(source_path: str | Path, current_user_id: str) -> Path:
 
     # Dossier de destination
     user_dir = STORAGE_ROOT / current_user_id
-    user_dir.mkdir(parents=True, exist_ok=True)
     dest = user_dir / source.name
 
     #1. Lecture 
