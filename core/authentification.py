@@ -1,3 +1,5 @@
+from matplotlib.path import Path
+
 import core.objects as objects
 from core.crypto import hash_password
 import secrets
@@ -6,7 +8,7 @@ import sqlite3
 import uuid 
 from datetime import datetime, timedelta
 import secrets
-
+STORAGE_ROOT = Path(__file__).parent.parent / "storage" / "users"
 #ESTABLISHING CONNECTION WITH THE DATABASE --------------------------------------
 
 connection = db.get_connection()
@@ -71,6 +73,9 @@ def register(username: str, password: str) -> tuple[bool, str]:
         salt=salt
     )
     
+    user_dir = STORAGE_ROOT / user_id
+    user_dir.mkdir(parents=True, exist_ok=True )
+
     db.get_connection().close()
 
 
