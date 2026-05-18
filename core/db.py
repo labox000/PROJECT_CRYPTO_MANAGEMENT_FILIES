@@ -1,29 +1,39 @@
 """
-db.py — Couche d'accès à la base de données
+db.py — Couche d'accès à la base de données.
 Toutes les interactions SQLite passent par ce fichier.
+
+PART 1 : Connexion & initialisation
+PART 2 : Gestion des utilisateurs  (lecture / écriture)
+PART 3 : Sessions
+PART 4 : Fichiers
+PART 5 : Logs
 """
 
 import sqlite3
 import os
-from datetime import datetime 
+import secrets
+from datetime import datetime
 
 DB_PATH     = "User_Management.db"
 SCHEMA_PATH = "schema.sql"
 
+# Mot de passe par défaut de l'admin au premier lancement
+_ADMIN_DEFAULT_PASSWORD = "Admin123!"
 
-"""PART 1 / GESTION UTILISATEUR"""
-#  CONNEXION
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 1 — CONNEXION & INITIALISATION
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def get_connection() -> sqlite3.Connection:
     """
     Ouvre et retourne une connexion SQLite configurée.
-    - row_factory  : les résultats sont des dicts  {colonne: valeur}
-    - foreign_keys : ON  (cascade delete sessions si user supprimé)
-    Chaque appelant est responsable de fermer la connexion (ou utiliser with).
+    - row_factory  : résultats accessibles par nom de colonne (row["username"])
+    - foreign_keys : ON  (cascade delete sessions/fichiers si user supprimé)
+    - WAL          : meilleures performances en lecture concurrente
     """
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row       # accès par nom de colonne : row["username"]
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
@@ -31,9 +41,12 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     """
-    Initialise la base de données en exécutant schema.sql.
-    À appeler une seule fois au démarrage de l'application (dans main.py).
-    Sans effet si les tables existent déjà (CREATE TABLE IF NOT EXISTS).
+    Initialise la base de données :
+      1. Exécute schema.sql (CREATE TABLE IF NOT EXISTS — sans effet si déjà fait)
+      2. Si le compte admin a encore le hash PLACEHOLDER, génère un vrai hash
+         avec le mot de passe par défaut "Admin123!" et met à jour la base.
+
+    À appeler une seule fois au démarrage dans main.py.
     """
     if not os.path.exists(SCHEMA_PATH):
         raise FileNotFoundError(f"schema.sql introuvable : {SCHEMA_PATH}")
@@ -44,19 +57,28 @@ def init_db() -> None:
     with get_connection() as conn:
         conn.executescript(sql)
 
+    # Remplace le PLACEHOLDER admin par un vrai hash au premier lancement
+    admin_row = get_user_by_id("00000000-0000-0000-0000-000000000001")
+    if admin_row and admin_row["password_hash"] == "PLACEHOLDER":
+        # Import local pour éviter la dépendance circulaire au niveau module
+        from core.crypto import hash_password
+        salt            = secrets.token_bytes(32)
+        pwd_hash, salt_hex = hash_password(_ADMIN_DEFAULT_PASSWORD, salt)
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE Users SET password_hash = ?, salt = ? WHERE user_id = ?",
+                (pwd_hash, salt_hex, "00000000-0000-0000-0000-000000000001")
+            )
+        print("[init] Compte admin initialisé. Mot de passe par défaut : Admin123!")
+        print("[init] Changez-le immédiatement après la première connexion.")
 
 
-#  USERS  —  lecture
-
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 2 — UTILISATEURS : lecture
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def get_user_by_username(username: str) -> sqlite3.Row | None:
-    """
-    Retourne la ligne Users complète pour ce username, ou None.
-    Usage :
-        user = get_user_by_username("alice")
-        if user:
-            print(user["password_hash"])
-    """
+    """Retourne la ligne Users complète pour ce username, ou None."""
     with get_connection() as conn:
         return conn.execute(
             "SELECT * FROM Users WHERE username = ?",
@@ -65,7 +87,7 @@ def get_user_by_username(username: str) -> sqlite3.Row | None:
 
 
 def get_user_by_id(user_id: str) -> sqlite3.Row | None:
-    """Retourne la ligne Users pour cet user_id, ou None."""
+    """Retourne la ligne Users complète pour cet user_id, ou None."""
     with get_connection() as conn:
         return conn.execute(
             "SELECT * FROM Users WHERE user_id = ?",
@@ -80,8 +102,8 @@ def user_exists(username: str) -> bool:
 
 def list_users() -> list[sqlite3.Row]:
     """
-    Retourne tous les users (sans les hash/salt).
-    Réservé à l'admin.
+    Retourne tous les utilisateurs SANS hash ni salt.
+    Usage : affichage standard, menu utilisateur.
     """
     with get_connection() as conn:
         return conn.execute(
@@ -89,9 +111,20 @@ def list_users() -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def list_users_admin() -> list[sqlite3.Row]:
+    """
+    Retourne tous les utilisateurs AVEC hash et salt.
+    Réservé à l'admin — affiche les données sensibles.
+    """
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT user_id, username, role, password_hash, salt, created_at, updated_at FROM Users"
+        ).fetchall()
 
-#  USERS  —  écriture
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 2 — UTILISATEURS : écriture
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def create_user(
     user_id: str,
@@ -100,23 +133,20 @@ def create_user(
     salt: str,
     role: str = "user",
     created_at: datetime | None = None,
-    updated_at: datetime | None = None
+    updated_at: datetime | None = None,
 ) -> tuple[bool, str]:
-
-    if created_at is None:
-        created_at = datetime.now()
-
-    if updated_at is None:
-        updated_at = datetime.now()
     """
     Insère un nouvel utilisateur.
     Retourne (True, message) ou (False, message d'erreur).
     """
+    created_at = created_at or datetime.now()
+    updated_at = updated_at or datetime.now()
+
     try:
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO Users (user_id, username, password_hash, salt, role,created_at, updated_at)
+                INSERT INTO Users (user_id, username, password_hash, salt, role, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (user_id, username.strip().lower(), password_hash, salt, role, created_at, updated_at)
@@ -155,25 +185,50 @@ def update_password(user_id: str, new_hash: str, new_salt: str) -> tuple[bool, s
         return True, "Mot de passe mis à jour."
     except sqlite3.Error as e:
         return False, f"Erreur base de données : {e}"
-    
-# ===========================================
-# check previlige of the user
 
-def is_admin(user):
+
+def delete_user(user_id: str) -> tuple[bool, str]:
+    """
+    Supprime un utilisateur et, par CASCADE, ses sessions et ses fichiers en base.
+    Les fichiers physiques dans storage/ doivent être supprimés séparément
+    (géré dans files.py avant d'appeler cette fonction).
+    Ne peut pas supprimer le compte admin principal.
+    """
+    if user_id == "00000000-0000-0000-0000-000000000001":
+        return False, "Impossible de supprimer le compte admin principal."
+    try:
+        with get_connection() as conn:
+            cursor = conn.execute("DELETE FROM Users WHERE user_id = ?", (user_id,))
+            if cursor.rowcount == 0:
+                return False, "Utilisateur introuvable."
+        return True, "Utilisateur supprimé."
+    except sqlite3.Error as e:
+        return False, f"Erreur base de données : {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 2 — PERMISSIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def is_admin(user: sqlite3.Row) -> bool:
+    """Retourne True si l'utilisateur a le rôle admin."""
     return user["role"] == "admin"
 
-def require_admin(user):
+
+def require_admin(user: sqlite3.Row) -> None:
+    """Lève PermissionError si l'utilisateur n'est pas admin."""
     if user["role"] != "admin":
-        raise PermissionError()
-    
+        raise PermissionError("Accès réservé à l'administrateur.")
 
 
-#  SESSIONS  —  lecture
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 3 — SESSIONS : lecture
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def get_session(session_id: str) -> sqlite3.Row | None:
     """
     Retourne la session si elle existe ET n'est pas expirée.
-    Retourne None si introuvable ou expirée.
+    Retourne None sinon.
     """
     with get_connection() as conn:
         return conn.execute(
@@ -199,26 +254,25 @@ def get_active_session_for_user(user_id: str) -> sqlite3.Row | None:
         ).fetchone()
 
 
-#  SESSIONS  —  écriture
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 3 — SESSIONS : écriture
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def create_session(
     session_id: str,
     user_id: str,
-    expires_at: str          # ISO-8601 : "2025-05-10 14:30:00"
+    expires_at: str,
 ) -> tuple[bool, str]:
     """
     Crée une nouvelle session.
-    Supprime d'abord toute session existante pour ce user (une seule session active).
+    Supprime d'abord toute session existante (une seule session active par user).
+    expires_at : string ISO-8601 ex "2025-05-10 14:30:00"
     """
     try:
         with get_connection() as conn:
-            # Supprimer l'ancienne session (design : une session par user)
             conn.execute("DELETE FROM Sessions WHERE user_id = ?", (user_id,))
             conn.execute(
-                """
-                INSERT INTO Sessions (session_id, user_id, expires_at)
-                VALUES (?, ?, ?)
-                """,
+                "INSERT INTO Sessions (session_id, user_id, expires_at) VALUES (?, ?, ?)",
                 (session_id, user_id, expires_at)
             )
         return True, "Session créée."
@@ -236,7 +290,7 @@ def delete_expired_sessions() -> int:
     """
     Supprime toutes les sessions expirées.
     Retourne le nombre de sessions supprimées.
-    À appeler périodiquement (ex: au démarrage, ou après chaque login).
+    À appeler au démarrage de l'application.
     """
     with get_connection() as conn:
         cursor = conn.execute(
@@ -244,7 +298,10 @@ def delete_expired_sessions() -> int:
         )
         return cursor.rowcount
 
-"""PART 2 / GESTION DE FICHIER"""
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 4 — FICHIERS : lecture
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def get_file(file_id: str) -> sqlite3.Row | None:
     """Retourne un fichier par son ID, ou None."""
@@ -262,7 +319,8 @@ def get_file_by_name(owner_id: str, filename: str) -> sqlite3.Row | None:
             "SELECT * FROM Files WHERE owner_id = ? AND filename = ?",
             (owner_id, filename)
         ).fetchone()
-    
+
+
 def list_user_files(owner_id: str) -> list[sqlite3.Row]:
     """Retourne tous les fichiers d'un utilisateur."""
     with get_connection() as conn:
@@ -280,32 +338,72 @@ def list_all_files() -> list[sqlite3.Row]:
             SELECT f.*, u.username
             FROM Files f
             JOIN Users u ON f.owner_id = u.user_id
+            ORDER BY u.username, f.filename
             """
         ).fetchall()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 4 — FICHIERS : écriture
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def create_file(
     file_id: str,
     owner_id: str,
     filename: str,
     crypto_mode: str,
-    crypto_meta: str,    # json.dumps({"key": ..., "iv": ...})
+    crypto_meta: str,       # json.dumps({"key": ..., "iv": ...})
     stored_path: str,
+    integrity_hash: str,    # SHA-256 du contenu AVANT chiffrement
 ) -> tuple[bool, str]:
     """Enregistre un fichier en base après chiffrement."""
     try:
         with get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO Files (file_id, owner_id, filename, crypto_mode, crypto_meta, stored_path)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO Files
+                    (file_id, owner_id, filename, crypto_mode, crypto_meta, stored_path, integrity_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (file_id, owner_id, filename, crypto_mode, crypto_meta, stored_path)
+                (file_id, owner_id, filename, crypto_mode, crypto_meta, stored_path, integrity_hash)
             )
         return True, f"Fichier '{filename}' enregistré."
     except sqlite3.IntegrityError:
         return False, f"Vous avez déjà un fichier nommé '{filename}'."
     except sqlite3.Error as e:
         return False, f"Erreur base de données : {e}"
+
+
+def update_file(
+    file_id: str,
+    filename: str,
+    crypto_mode: str,
+    crypto_meta: str,
+    stored_path: str,
+    integrity_hash: str,
+) -> tuple[bool, str]:
+    """
+    Met à jour les métadonnées d'un fichier après modification.
+    Le trigger SQL updated_at se charge de mettre à jour la date automatiquement.
+    """
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE Files
+                SET filename       = ?,
+                    crypto_mode    = ?,
+                    crypto_meta    = ?,
+                    stored_path    = ?,
+                    integrity_hash = ?
+                WHERE file_id = ?
+                """,
+                (filename, crypto_mode, crypto_meta, stored_path, integrity_hash, file_id)
+            )
+        return True, f"Fichier '{filename}' mis à jour."
+    except sqlite3.Error as e:
+        return False, f"Erreur base de données : {e}"
+
 
 def delete_file(file_id: str) -> tuple[bool, str]:
     """Supprime l'entrée d'un fichier en base."""
@@ -315,3 +413,109 @@ def delete_file(file_id: str) -> tuple[bool, str]:
         return True, "Fichier supprimé."
     except sqlite3.Error as e:
         return False, f"Erreur base de données : {e}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 5 — LOGS : écriture
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def create_log(
+    user_id: str,
+    action: str,
+    detail: str = "",
+) -> None:
+    """
+    Enregistre une action dans les logs.
+    Silencieux en cas d'erreur (les logs ne doivent jamais bloquer l'app).
+
+    Actions attendues :
+        register, login, logout, login_failed,
+        change_username, change_password,
+        add_file, delete_file, modify_file, verify_integrity
+    """
+    import uuid
+    log_id = str(uuid.uuid4())
+    try:
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT INTO Logs (log_id, user_id, action, detail) VALUES (?, ?, ?, ?)",
+                (log_id, user_id, action, detail)
+            )
+    except sqlite3.Error:
+        pass  # Les logs ne bloquent jamais l'application
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PART 5 — LOGS : lecture (réservé admin)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_all_logs() -> list[sqlite3.Row]:
+    """
+    Retourne tous les logs avec date, user_id, username, prénom et action.
+    Triés du plus récent au plus ancien.
+    Réservé à l'admin.
+    """
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT
+                l.log_id,
+                l.created_at,
+                l.action,
+                l.detail,
+                u.user_id,
+                u.username
+            FROM Logs l
+            JOIN Users u ON l.user_id = u.user_id
+            ORDER BY l.created_at DESC
+            """
+        ).fetchall()
+
+
+def get_logs_by_user_id(user_id: str) -> list[sqlite3.Row]:
+    """
+    Retourne tous les logs d'un utilisateur précis (recherche par user_id).
+    Réservé à l'admin.
+    """
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT
+                l.log_id,
+                l.created_at,
+                l.action,
+                l.detail,
+                u.user_id,
+                u.username
+            FROM Logs l
+            JOIN Users u ON l.user_id = u.user_id
+            WHERE l.user_id = ?
+            ORDER BY l.created_at DESC
+            """,
+            (user_id,)
+        ).fetchall()
+
+
+def get_logs_by_username(username: str) -> list[sqlite3.Row]:
+    """
+    Retourne tous les logs d'un utilisateur recherché par son username.
+    Réservé à l'admin.
+    """
+    user = get_user_by_username(username)
+    if user is None:
+        return []
+    return get_logs_by_user_id(user["user_id"])
+
+
+def search_logs(query: str) -> list[sqlite3.Row]:
+    """
+    Recherche dans les logs par username OU user_id.
+    L'admin peut taper n'importe lequel des deux.
+    Retourne une liste vide si rien trouvé.
+    """
+    # Essai par user_id exact d'abord
+    results = get_logs_by_user_id(query)
+    if results:
+        return results
+    # Sinon par username (insensible à la casse)
+    return get_logs_by_username(query)
