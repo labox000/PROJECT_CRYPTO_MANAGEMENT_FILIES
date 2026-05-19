@@ -31,6 +31,7 @@ from core.files import (
     delete_file,
     verify_integrity,
     list_files,
+    list_all_users_files,
     list_all_files_admin,
 )
 import core.objects as objects
@@ -128,9 +129,116 @@ def menu_files(user: objects.User) -> None:
         print("    4. Modifier un fichier")
         print("    5. Supprimer un fichier")
         print("    6. Vérifier l'intégrité d'un fichier")
+        print("    7. Voir les fichiers des autres utilisateurs")
         print("    0. Retour")
         print()
         choix = prompt("Choix")
+
+        if choix == "1":
+            header("Mes fichiers")
+            list_files(user.user_id)
+            pause()
+
+        elif choix == "2":
+            header("Ajouter un fichier")
+            source = prompt("Chemin du fichier à ajouter")
+            try:
+                add_file(source, user.user_id)
+            except FileExistsError as e:
+                err(str(e))
+            except FileNotFoundError as e:
+                err(str(e))
+            except Exception as e:
+                err(f"Erreur inattendue : {e}")
+            pause()
+
+        elif choix == "3":
+            header("Ouvrir un fichier")
+            list_files(user.user_id)
+            filename = prompt("\n  Nom du fichier à ouvrir")
+            try:
+                content = open_file(filename, user.user_id)
+                separator()
+                try:
+                    print(content.decode("utf-8"))
+                except UnicodeDecodeError:
+                    warn("Ce fichier n'est pas du texte lisible (binaire).")
+                separator()
+            except PermissionError as e:
+                err(str(e))
+            except FileNotFoundError as e:
+                err(str(e))
+            except ValueError as e:
+                err(str(e))
+            except Exception as e:
+                err(f"Erreur inattendue : {e}")
+            pause()
+
+        elif choix == "4":
+            header("Modifier un fichier")
+            list_files(user.user_id)
+            filename   = prompt("\n  Nom du fichier à modifier")
+            new_source = prompt("Chemin du fichier contenant le nouveau contenu")
+            try:
+                modify_file(filename, new_source, user.user_id)
+            except PermissionError as e:
+                err(str(e))
+            except FileNotFoundError as e:
+                err(str(e))
+            except Exception as e:
+                err(f"Erreur inattendue : {e}")
+            pause()
+
+        elif choix == "5":
+            header("Supprimer un fichier")
+            list_files(user.user_id)
+            filename = prompt("\n  Nom du fichier à supprimer")
+            warn(f"Confirmez-vous la suppression de '{filename}' ? (oui/non)")
+            if prompt("Confirmation").lower() in ("oui", "o", "yes", "y"):
+                try:
+                    delete_file(filename, user.user_id)
+                    ok(f"'{filename}' supprimé.")
+                except PermissionError as e:
+                    err(str(e))
+                except FileNotFoundError as e:
+                    err(str(e))
+                except Exception as e:
+                    err(f"Erreur inattendue : {e}")
+            else:
+                info("Suppression annulée.")
+            pause()
+
+        elif choix == "6":
+            header("Vérifier l'intégrité")
+            list_files(user.user_id)
+            filename = prompt("\n  Nom du fichier à vérifier")
+            try:
+                verify_integrity(filename, user.user_id)
+            except PermissionError as e:
+                err(str(e))
+            except FileNotFoundError as e:
+                err(str(e))
+            except Exception as e:
+                err(f"Erreur inattendue : {e}")
+            pause()
+
+        elif choix == "7":
+            header("Fichiers des autres utilisateurs")
+            info("Vous pouvez voir les noms des fichiers mais pas leur contenu.")
+            all_users = db.list_users()
+            # Exclure l'utilisateur courant (il a déjà son propre menu)
+            other_users = [u for u in all_users if u["user_id"] != user.user_id]
+            if not other_users:
+                info("Aucun autre utilisateur enregistré.")
+            else:
+                list_all_users_files(other_users)
+            pause()
+
+        elif choix == "0":
+            break
+        else:
+            err("Option invalide.")
+            pause()
 
         if choix == "1":
             header("Mes fichiers")
