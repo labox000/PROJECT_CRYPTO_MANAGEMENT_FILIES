@@ -1,140 +1,359 @@
-from matplotlib.path import Path
+"""
+authentification.py — Inscription, connexion, sessions, modification de compte.
 
-import core.objects as objects
-from core.crypto import hash_password
+Fonctions publiques :
+    register(username, password)            → (bool, str)
+    login(username, password)               → (bool, User | str)
+    logout(session_id, user_id)             → None
+    create_user_session(user_id)            → Session
+    change_username(user_id, new_username, current_password)  → (bool, str)
+    change_password(user_id, old_password, new_password)      → (bool, str)
+"""
+
+import uuid
 import secrets
-import core.db as db 
-import sqlite3
-import uuid 
 from datetime import datetime, timedelta
-import secrets
-STORAGE_ROOT = Path(__file__).parent.parent / "storage" / "users"
-#ESTABLISHING CONNECTION WITH THE DATABASE --------------------------------------
 
-connection = db.get_connection()
-#register-------------------------------------------------------------------------------
+import core.db as db
+import core.objects as objects
+from core.crypto import hash_password, verify_password
 
-def register(username: str, password: str) -> tuple[bool, str]:
+# Durée de vie d'une session (modifiable ici uniquement)
+SESSION_DURATION_MINUTES = 30
+
+# Caractères spéciaux autorisés pour la validation du mot de passe
+_SPECIAL_CHARS = "!@#$%^&*()-_=+[]{};:,.<>?/\\|"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  VALIDATION MOT DE PASSE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _validate_password(password: str) -> tuple[bool, str]:
     """
-    register nouvel user .
-    retourne tuple si vrai + msg explicatif. 
+    Vérifie que le mot de passe respecte la politique de sécurité.
+    Retourne (True, "") si valide, (False, message) sinon.
+    Centralisé ici pour être réutilisé dans register() et change_password().
     """
-    username=username.strip().lower()
-    if not username :
-        return False, "Le nom d'utilisateur ne peut pas être vide."
-    if not password.strip():
-        return False, "Le mot de passe ne peut pas être vide."
-    if len(username) < 3:
-        return False, "Le nom d'utilisateur doit contenir au moins 3 caractères."
-    
-    #verification de la solidite du mot de passe -------------------------------
     if len(password) < 6:
         return False, "Le mot de passe doit contenir au moins 6 caractères."
     if not any(c.isupper() for c in password):
-        return False ,"Le mot de passe doit contenir une majuscule"
+        return False, "Le mot de passe doit contenir au moins une majuscule."
     if not any(c.islower() for c in password):
-        return False , "Le mot de passe doit contenir une minuscule"
+        return False, "Le mot de passe doit contenir au moins une minuscule."
     if not any(c.isdigit() for c in password):
-        return False, "Le mot de passe doit contenir un chiffre"
-    special_chars = "!@#$%^&*()-_=+[]{};:,.<>?/\\|"
+        return False, "Le mot de passe doit contenir au moins un chiffre."
+    if not any(c in _SPECIAL_CHARS for c in password):
+        return False, "Le mot de passe doit contenir au moins un caractère spécial."
+    return True, ""
 
-    if not any(c in special_chars for c in password):
-        return False, "Le mot de passe doit contenir un caractère spécial" 
-    
-    confirm_password = input("Confirm password: ")
 
+# ═══════════════════════════════════════════════════════════════════════════════
+#  INSCRIPTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def register(username: str, password: str, confirm_password: str) -> tuple[bool, str]:
+    """
+    Inscrit un nouvel utilisateur.
+
+    Args:
+        username         : nom d'utilisateur souhaité
+        password         : mot de passe choisi
+        confirm_password : confirmation du mot de passe (saisi une 2e fois)
+
+    Retourne (True, message_succès) ou (False, message_erreur).
+    """
+    # --- Validation username ---
+    username = username.strip().lower()
+    if not username:
+        return False, "Le nom d'utilisateur ne peut pas être vide."
+    if len(username) < 3:
+        return False, "Le nom d'utilisateur doit contenir au moins 3 caractères."
+
+    # --- Validation mot de passe ---
+    if not password.strip():
+        return False, "Le mot de passe ne peut pas être vide."
+    ok, msg = _validate_password(password)
+    if not ok:
+        return False, msg
+
+    # --- Confirmation mot de passe ---
     if password != confirm_password:
-        print("Passwords do not match")
-        return False ,"passwords do not match "
-    #----------------------------------------------------------------
-    
-    #verification de l'existence de l'utilisateur dans la base de données
+        return False, "Les mots de passe ne correspondent pas."
 
+    # --- Unicité du username ---
     if db.user_exists(username):
-        print("Username already exists")
-        return   False ," utilisateur existant "
-    
-    #-------------------------------------------------------------------
+        return False, "Ce nom d'utilisateur est déjà pris."
 
-    #generating user_id------------------------------------------
-    user_id = str(uuid.uuid4())
-    #------------------------------------------------------------
-    
-    #hashing password
+    # --- Création en base ---
+    user_id  = str(uuid.uuid4())
+    salt     = secrets.token_bytes(32)          # 32 octets aléatoires (bytes)
+    pwd_hash, salt_hex = hash_password(password, salt)
 
-    salt = secrets.token_hex(16)
-    password_hash = hash_password(password, salt)[0]
-    #------------------------------------------------------------
-    
-    db.create_user(
-        user_id=user_id,
-        username=username,
-        password_hash=password_hash,
-        salt=salt
+    ok, msg = db.create_user(
+        user_id       = user_id,
+        username      = username,
+        password_hash = pwd_hash,
+        salt          = salt_hex,
     )
-    
-    user_dir = STORAGE_ROOT / user_id
-    user_dir.mkdir(parents=True, exist_ok=True )
+    if not ok:
+        return False, msg
 
-    db.get_connection().close()
+    # --- Log ---
+    db.create_log(user_id, "register", f"Nouvel utilisateur : {username}")
 
-
-    return True, f"Compte '{username}' créé avec succès."
-
+    return True, f"Compte '{username}' créé avec succès. Vous pouvez maintenant vous connecter."
 
 
-#authentication function --------------------------------------------------------------
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CONNEXION
+# ═══════════════════════════════════════════════════════════════════════════════
 
-def authenticate(username: str, password: str) -> tuple[bool, objects.User | str]: 
+def login(username: str, password: str) -> tuple[bool, objects.User | str]:
     """
     Authentifie un utilisateur.
-    Retourne (True, user) ou (False, message d'erreur).
+
+    Retourne:
+        (True,  objects.User)  si les identifiants sont corrects
+        (False, str)           message d'erreur sinon
     """
-    try:
-        username=username.strip().lower()
-        if not username :
-            return False, "Le nom d'utilisateur ne peut pas être vide."
-        if not password.strip():
-            return False, "Le mot de passe ne peut pas être vide." 
+    username = username.strip().lower()
 
-        user = db.get_user_by_username(username)
-        if user is None:
-            return False, "Nom d'utilisateur ou mot de passe incorrect."
+    if not username:
+        return False, "Le nom d'utilisateur ne peut pas être vide."
+    if not password.strip():
+        return False, "Le mot de passe ne peut pas être vide."
 
-        stored_hash = user["password_hash"]
-        salt = user["salt"]
+    user_row = db.get_user_by_username(username)
 
-        if hash_password(password, salt)[0] == stored_hash:
-            print("Authentication successful")
-            print(f"Welcome, {user['username']}!")
-            #create current user object
-            current_user = objects.User(
-                user_id=user["user_id"],
-                username=user["username"],
-                password_hash=user["password_hash"],
-                salt=user["salt"],
-                role=user["role"]
-            )
-            #return the user object for further use (e.g., session creation)
-            return True, current_user
-        else:
-            return False, "Nom d'utilisateur ou mot de passe incorrect."
-    except Exception as e:
+    # Message volontairement générique pour ne pas révéler si le username existe
+    if user_row is None:
+        return False, "Nom d'utilisateur ou mot de passe incorrect."
 
-        return False, f"Erreur d'authentification : {e}"
-    
-def create_session(user_id: str) -> objects.Session :
-    """Crée une session pour un utilisateur donné et retourne l'objet session."""
-    token = secrets.token_hex(32)
+    if not verify_password(password, user_row["password_hash"], user_row["salt"]):
+        db.create_log(user_row["user_id"], "login_failed", f"Tentative échouée pour : {username}")
+        return False, "Nom d'utilisateur ou mot de passe incorrect."
+
+    # --- Construction de l'objet User ---
+    current_user = objects.User(
+        user_id       = user_row["user_id"],
+        username      = user_row["username"],
+        password_hash = user_row["password_hash"],
+        salt          = user_row["salt"],
+        role          = user_row["role"],
+        created_at    = user_row["created_at"],
+        updated_at    = user_row["updated_at"],
+    )
+
+    db.create_log(current_user.user_id, "login", f"Connexion réussie : {username}")
+    return True, current_user
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  SESSION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def create_user_session(user_id: str) -> objects.Session:
+    """
+    Crée une session pour l'utilisateur connecté.
+    Supprime toute session existante (une seule session active à la fois).
+
+    Retourne l'objet Session créé, ou lève RuntimeError si la base échoue.
+    """
+    session_id = secrets.token_hex(32)
     created_at = datetime.now()
-    try:
-        with db.get_connection() as conn:
-            conn.execute(
-                "INSERT INTO Sessions (session_id, user_id , created_at , expires_at) VALUES (?, ?, ?, ?)",
-                (token, user_id, datetime.now() , created_at + timedelta(minutes=10))
-            )
-    except sqlite3.Error as e :
-        print(f"Erreur lors de la création de session : {e}")
-        return False
-    current_Session = objects.Session(session_id=token, user_id=user_id, created_at=created_at, expires_at=created_at + timedelta(minutes=10))
-    return current_Session 
+    expires_at = created_at + timedelta(minutes=SESSION_DURATION_MINUTES)
+    expires_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
+
+    ok, msg = db.create_session(session_id, user_id, expires_str)
+    if not ok:
+        raise RuntimeError(f"Impossible de créer la session : {msg}")
+
+    return objects.Session(
+        session_id = session_id,
+        user_id    = user_id,
+        created_at = created_at,
+        expires_at = expires_at,
+    )
+
+
+def logout(session_id: str, user_id: str) -> None:
+    """
+    Déconnecte l'utilisateur :
+      - supprime la session en base
+      - enregistre le log de déconnexion
+    """
+    db.delete_session(session_id)
+    db.create_log(user_id, "logout", "Déconnexion")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MODIFICATION DE COMPTE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def change_username(
+    user_id: str,
+    new_username: str,
+    current_password: str,
+) -> tuple[bool, str]:
+    """
+    Change le nom d'utilisateur après vérification du mot de passe actuel.
+
+    Args:
+        user_id          : UUID de l'utilisateur
+        new_username     : nouveau nom souhaité
+        current_password : mot de passe actuel (confirmation de sécurité)
+
+    Retourne (True, message) ou (False, message_erreur).
+    """
+    new_username = new_username.strip().lower()
+
+    if not new_username:
+        return False, "Le nouveau nom d'utilisateur ne peut pas être vide."
+    if len(new_username) < 3:
+        return False, "Le nom d'utilisateur doit contenir au moins 3 caractères."
+
+    # Vérification du mot de passe actuel
+    user_row = db.get_user_by_id(user_id)
+    if user_row is None:
+        return False, "Utilisateur introuvable."
+    if not verify_password(current_password, user_row["password_hash"], user_row["salt"]):
+        return False, "Mot de passe incorrect."
+
+    old_username = user_row["username"]
+    if new_username == old_username:
+        return False, "Le nouveau nom est identique à l'ancien."
+
+    ok, msg = db.update_username(user_id, new_username)
+    if not ok:
+        return False, msg
+
+    db.create_log(user_id, "change_username", f"{old_username} → {new_username}")
+    return True, f"Nom d'utilisateur changé en '{new_username}'."
+
+
+def change_password(
+    user_id: str,
+    old_password: str,
+    new_password: str,
+    confirm_new_password: str,
+) -> tuple[bool, str]:
+    """
+    Change le mot de passe après vérification de l'ancien.
+
+    Args:
+        user_id              : UUID de l'utilisateur
+        old_password         : mot de passe actuel
+        new_password         : nouveau mot de passe
+        confirm_new_password : confirmation du nouveau mot de passe
+
+    Retourne (True, message) ou (False, message_erreur).
+    """
+    user_row = db.get_user_by_id(user_id)
+    if user_row is None:
+        return False, "Utilisateur introuvable."
+
+    # Vérification de l'ancien mot de passe
+    if not verify_password(old_password, user_row["password_hash"], user_row["salt"]):
+        return False, "Ancien mot de passe incorrect."
+
+    # Validation du nouveau mot de passe
+    ok, msg = _validate_password(new_password)
+    if not ok:
+        return False, msg
+
+    if new_password != confirm_new_password:
+        return False, "Les nouveaux mots de passe ne correspondent pas."
+
+    if old_password == new_password:
+        return False, "Le nouveau mot de passe doit être différent de l'ancien."
+
+    # Hash du nouveau mot de passe
+    salt              = secrets.token_bytes(32)
+    new_hash, salt_hex = hash_password(new_password, salt)
+
+    ok, msg = db.update_password(user_id, new_hash, salt_hex)
+    if not ok:
+        return False, msg
+
+    db.create_log(user_id, "change_password", "Mot de passe modifié")
+    return True, "Mot de passe mis à jour avec succès."
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  GESTION ADMIN — UTILISATEURS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def admin_delete_user(admin_user: objects.User, target_user_id: str) -> tuple[bool, str]:
+    """
+    Permet à l'admin de supprimer un utilisateur.
+    Supprime aussi ses fichiers physiques dans storage/ avant la suppression en base.
+
+    Args:
+        admin_user     : objet User de l'admin connecté (pour vérification de rôle)
+        target_user_id : UUID de l'utilisateur à supprimer
+    """
+    # Vérification du rôle admin
+    if admin_user.role != "admin":
+        return False, "Accès refusé."
+
+    if target_user_id == admin_user.user_id:
+        return False, "Vous ne pouvez pas supprimer votre propre compte."
+
+    target = db.get_user_by_id(target_user_id)
+    if target is None:
+        return False, "Utilisateur introuvable."
+
+    # Suppression des fichiers physiques
+    from pathlib import Path
+    storage_dir = Path("storage") / "users" / target_user_id
+    if storage_dir.exists():
+        import shutil
+        shutil.rmtree(storage_dir)
+
+    # Suppression en base (CASCADE supprime sessions + fichiers en base)
+    ok, msg = db.delete_user(target_user_id)
+    if not ok:
+        return False, msg
+
+    db.create_log(
+        admin_user.user_id,
+        "delete_user",
+        f"Admin a supprimé l'utilisateur : {target['username']} ({target_user_id})"
+    )
+    return True, f"Utilisateur '{target['username']}' supprimé."
+
+
+def admin_reset_password(
+    admin_user: objects.User,
+    target_user_id: str,
+    new_password: str,
+) -> tuple[bool, str]:
+    """
+    Permet à l'admin de réinitialiser le mot de passe d'un utilisateur
+    sans connaître l'ancien.
+    """
+    if admin_user.role != "admin":
+        return False, "Accès refusé."
+
+    ok, msg = _validate_password(new_password)
+    if not ok:
+        return False, msg
+
+    target = db.get_user_by_id(target_user_id)
+    if target is None:
+        return False, "Utilisateur introuvable."
+
+    salt              = secrets.token_bytes(32)
+    new_hash, salt_hex = hash_password(new_password, salt)
+
+    ok, msg = db.update_password(target_user_id, new_hash, salt_hex)
+    if not ok:
+        return False, msg
+
+    db.create_log(
+        admin_user.user_id,
+        "change_password",
+        f"Admin a réinitialisé le mot de passe de : {target['username']}"
+    )
+    return True, f"Mot de passe de '{target['username']}' réinitialisé."
