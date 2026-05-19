@@ -11,7 +11,6 @@ Flux :
 
 import os
 from pathlib import Path
-
 import core.db as db
 from core.db import init_db, delete_expired_sessions
 from core.authentification import (

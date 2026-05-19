@@ -17,10 +17,6 @@ from datetime import datetime
 DB_PATH     = "User_Management.db"
 SCHEMA_PATH = "schema.sql"
 
-# Mot de passe par défaut de l'admin au premier lancement
-_ADMIN_DEFAULT_PASSWORD = "Admin123!"
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PART 1 — CONNEXION & INITIALISATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -41,10 +37,11 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db() -> None:
     """
-    Initialise la base de données :
-      1. Exécute schema.sql (CREATE TABLE IF NOT EXISTS — sans effet si déjà fait)
-      2. Si le compte admin a encore le hash PLACEHOLDER, génère un vrai hash
-         avec le mot de passe par défaut "Admin123!" et met à jour la base.
+    Initialise la base de données en exécutant schema.sql.
+    Sans effet si les tables existent déjà (CREATE TABLE IF NOT EXISTS).
+
+    Le premier utilisateur qui s'inscrit via register() devient automatiquement
+    admin — aucun compte n'est hardcodé ici.
 
     À appeler une seule fois au démarrage dans main.py.
     """
@@ -56,21 +53,6 @@ def init_db() -> None:
 
     with get_connection() as conn:
         conn.executescript(sql)
-
-    # Remplace le PLACEHOLDER admin par un vrai hash au premier lancement
-    admin_row = get_user_by_id("00000000-0000-0000-0000-000000000001")
-    if admin_row and admin_row["password_hash"] == "PLACEHOLDER":
-        # Import local pour éviter la dépendance circulaire au niveau module
-        from core.crypto import hash_password
-        salt            = secrets.token_bytes(32)
-        pwd_hash, salt_hex = hash_password(_ADMIN_DEFAULT_PASSWORD, salt)
-        with get_connection() as conn:
-            conn.execute(
-                "UPDATE Users SET password_hash = ?, salt = ? WHERE user_id = ?",
-                (pwd_hash, salt_hex, "00000000-0000-0000-0000-000000000001")
-            )
-        print("[init] Compte admin initialisé. Mot de passe par défaut : Admin123!")
-        print("[init] Changez-le immédiatement après la première connexion.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
